@@ -79,8 +79,8 @@ int __cdecl main(int argc, char* argv[])
 		}
 		if (first_arg == "--help" || (argc - start_index) % 2 != 0)
 		{
-			std::cout << "Usage: " << argv[0] << " (--selectfeatures (n)) [class1 class1filename class2 class2filename ... classN classNfilename]" << std::endl;
-			std::cout << "If no arguments are provided, this command line will be run: " << argv[0] << " icse metadata/icse_id.txt vldb metadata/vldb_id.txt" << std::endl;
+			std::cout << "Usage: " << argv[0] << " (--selectfeatures (<n>)) [class1 class1filename class2 class2filename ... classN classNfilename]" << std::endl;
+			std::cout << "If no arguments are provided, this command line will be run:\n\t" << argv[0] << " --selectfeatures 100 icse metadata/icse_id.txt vldb metadata/vldb_id.txt" << std::endl;
 
 			return 0;
 		}
