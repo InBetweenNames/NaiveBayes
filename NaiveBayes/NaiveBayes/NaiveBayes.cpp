@@ -2,6 +2,7 @@
 //
 
 #include <Eigen/Core>
+#include <Eigen/StdVector>
 #include <cstdint>
 #include <iostream>
 #include <iterator>
@@ -64,28 +65,59 @@ Eigen::VectorXi count_occurrences(const std::vector<Point>& metadata, const std:
 }
 */
 
+template <typename T>
+using Vec = std::vector<T, Eigen::aligned_allocator<T>>;
+
+Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
+{
+	Vec<Vec<Eigen::Array2i>> classes;
+	for (const auto& C : metadata)
+	{
+		Eigen::Array2i indices{ 0, static_cast<int>(C.second.size()) };
+		classes.emplace_back(Vec<Eigen::Array2i>{indices});
+	}
+
+	return classes;
+}
+
 class NaiveBayes
 {
 	int64_t N = 0;
 	std::vector<int64_t> n_docs_in_class;
 public:
 
-	//Takes a vector of pairs of iterators as a data source
+
 	template <typename T>
-	NaiveBayes(const std::vector<std::pair<T, T>>& metadata)
+	NaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<T>> trainingIndices)
 	{
 		/*for (size_t i = 0; i < metadata; i++)
 		{
 
 		}*/
-		for (const auto C : metadata)
+		const auto n_classes = metadata.size();
+
+		for (size_t i = 0; i < n_classes; i++)
 		{
-			const auto Nc = std::distance(C.first, C.second);
+			const auto& classIndices = trainingIndices[i];
+			Eigen::Index Nc = 0;
+			for (const auto& indices : classIndices)
+			{
+				const auto start = indices(0);
+				const auto end = indices(1);
+				Nc += end - start;
+			}
 			n_docs_in_class.emplace_back(Nc);
 			N += Nc;
 		}
 
 	}
+
+	//Trains using entire metadata set
+	NaiveBayes(const std::vector<ClassMetadata>& metadata) : NaiveBayes{ metadata, train_all(metadata) }
+	{
+
+	}
+
 };
 
 Eigen::Array<Eigen::Array2i, -1, -1> get_m_fold_slices(const std::vector<ClassMetadata>& metadata, int M)
@@ -99,29 +131,54 @@ Eigen::Array<Eigen::Array2i, -1, -1> get_m_fold_slices(const std::vector<ClassMe
 		const auto n_per_fold = Nc / M;
 		//const auto n_per_fold_r = Nc % M;
 
-		int curr = 0;
 		for (int j = 0; j < M; j++)
 		{
 			const auto start = j*n_per_fold;
 
 
-			indices(j, i)(0) = start;
+			indices(j, i)(0) = static_cast<int>(start);
 			
 			//Take care to include remainder in the last fold
 			if (j == M - 1)
 			{
 				const auto end = Nc;
-				indices(j, i)(1) = end;
+				indices(j, i)(1) = static_cast<int>(end);
 			}
 			else
 			{
 				const auto end = (j + 1)*n_per_fold;
-				indices(j, i)(1) = end;
+				indices(j, i)(1) = static_cast<int>(end);
 			}
 		}
 	}
 
 	return indices;
+}
+
+template <typename T>
+Vec<Eigen::Array2i> get_m_fold_training_indices(const T& indices, const Eigen::Index exclude)
+{
+	Vec<Eigen::Array2i> chunks;
+
+	if (exclude != 0)
+	{
+		Vector2i chunk = { indices(0)(0), indices(exclude - 1)(1) };
+		chunks.emplace_back(chunk);
+	}
+
+	if (exclude != indices.rows() - 1)
+	{
+		Vector2i chunk = { indices(exclude + 1)(0), indices(indices.rows() - 1)(1) };
+		chunks.emplace_back(chunk);
+	}
+
+	return chunks;
+}
+
+template <typename T>
+Eigen::Array2i get_m_fold_testing_indices(const T& indices, const Eigen::Index include)
+{
+	return indices.row(include);
 }
 
 int __cdecl main(int argc, char* argv[])
@@ -188,6 +245,8 @@ int __cdecl main(int argc, char* argv[])
 	}
 
 	const auto folds = get_m_fold_slices(metadata, 10);
+
+	NaiveBayes all{ metadata };
 
 	//std::vector<std::vector<std::pair<it, it>>> = mFoldCrossValidate(metadata, 10);
 
