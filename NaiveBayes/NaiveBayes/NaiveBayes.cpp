@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iostream>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,21 @@ std::vector<Point> consume_metadata(const std::string& filename)
 	}
 
 	return points;
+}
+
+//Extract all words from a vector of metadata and add them to a vocabulary set
+void extract_vocabulary(const std::vector<Point>& metadata, std::set<std::string>& vocabulary)
+{
+	for (const auto& docs : metadata)
+	{
+		const auto& doc = docs.second;
+		std::stringstream tokens{ doc };
+		std::string token;
+		while (tokens >> token)
+		{
+			vocabulary.emplace(token);
+		}
+	}
 }
 
 int __cdecl main(int argc, char* argv[])
@@ -93,12 +109,19 @@ int __cdecl main(int argc, char* argv[])
 
 	}
 
-	std::vector<ClassMetadata> metadata;
+	//std::vector<ClassMetadata> metadata;
 
+	std::vector<int64_t> n_docs_in_class;
+	int64_t N = 0;
+	std::set<std::string> V;
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
-		metadata.emplace_back(file.first, class_metadata);
+		const auto Nc = static_cast<int64_t>(class_metadata.size());
+		n_docs_in_class.emplace_back(Nc);
+		extract_vocabulary(class_metadata, V);
+
+		N += Nc;
 	}
 
     return 0;
