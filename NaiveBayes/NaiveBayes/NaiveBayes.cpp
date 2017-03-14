@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <fstream>
 #include <set>
 #include <string>
@@ -56,6 +57,73 @@ void extract_vocabulary(const std::vector<Point>& metadata, std::set<std::string
 	}
 }
 
+/*
+Eigen::VectorXi count_occurrences(const std::vector<Point>& metadata, const std::set<std::string>& vocabulary)
+{
+
+}
+*/
+
+class NaiveBayes
+{
+	int64_t N = 0;
+	std::vector<int64_t> n_docs_in_class;
+public:
+
+	//Takes a vector of pairs of iterators as a data source
+	template <typename T>
+	NaiveBayes(const std::vector<std::pair<T, T>>& metadata)
+	{
+		/*for (size_t i = 0; i < metadata; i++)
+		{
+
+		}*/
+		for (const auto C : metadata)
+		{
+			const auto Nc = std::distance(C.first, C.second);
+			n_docs_in_class.emplace_back(Nc);
+			N += Nc;
+		}
+
+	}
+};
+
+Eigen::Array<Eigen::Array2i, -1, -1> get_m_fold_slices(const std::vector<ClassMetadata>& metadata, int M)
+{
+	const auto n_classes = metadata.size();
+	Eigen::Array<Eigen::Array2i, -1, -1> indices{M, n_classes};
+
+	for (int i = 0; i < n_classes; i++)
+	{
+		const auto Nc = metadata[i].second.size();
+		const auto n_per_fold = Nc / M;
+		//const auto n_per_fold_r = Nc % M;
+
+		int curr = 0;
+		for (int j = 0; j < M; j++)
+		{
+			const auto start = j*n_per_fold;
+
+
+			indices(j, i)(0) = start;
+			
+			//Take care to include remainder in the last fold
+			if (j == M - 1)
+			{
+				const auto end = Nc;
+				indices(j, i)(1) = end;
+			}
+			else
+			{
+				const auto end = (j + 1)*n_per_fold;
+				indices(j, i)(1) = end;
+			}
+		}
+	}
+
+	return indices;
+}
+
 int __cdecl main(int argc, char* argv[])
 {
 	std::vector<std::pair<std::string, std::string>> metadata_files;
@@ -87,7 +155,7 @@ int __cdecl main(int argc, char* argv[])
 						n_features = 100;
 					}
 				}
-				catch (const std::invalid_argument& ex)
+				catch (...)
 				{
 					start_index = 2;
 				}
@@ -111,18 +179,17 @@ int __cdecl main(int argc, char* argv[])
 
 	//std::vector<ClassMetadata> metadata;
 
-	std::vector<int64_t> n_docs_in_class;
-	int64_t N = 0;
-	std::set<std::string> V;
+	std::vector<ClassMetadata> metadata;
+
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
-		const auto Nc = static_cast<int64_t>(class_metadata.size());
-		n_docs_in_class.emplace_back(Nc);
-		extract_vocabulary(class_metadata, V);
-
-		N += Nc;
+		metadata.emplace_back(file.first, class_metadata);
 	}
+
+	const auto folds = get_m_fold_slices(metadata, 10);
+
+	//std::vector<std::vector<std::pair<it, it>>> = mFoldCrossValidate(metadata, 10);
 
     return 0;
 }
