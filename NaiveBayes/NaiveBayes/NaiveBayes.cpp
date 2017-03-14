@@ -81,7 +81,38 @@ Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
 	return classes;
 }
 
-class NaiveBayes
+Eigen::Index vocab_to_index(const std::vector<std::string>& vocabulary, const std::string& token)
+{
+	//Take advantage of sorted vector -- do binary search
+	const auto n = vocabulary.size();
+	Eigen::Index lowerBound = 0;
+	Eigen::Index upperBound = n - 1;
+
+	Eigen::Index midpoint = 0;
+
+	do {
+		if (upperBound < lowerBound)
+		{
+			return -1;
+		}
+		midpoint = (lowerBound + upperBound) / 2;
+		if (vocabulary[midpoint] < token)
+		{
+			//Take second half
+			lowerBound = midpoint + 1;
+		}
+		else if (token < vocabulary[midpoint])
+		{
+			//Take first half
+			upperBound = midpoint - 1;
+		}
+
+	} while (vocabulary[midpoint] != token);
+
+	return midpoint;
+}
+
+class MultinomialNaiveBayes
 {
 	int64_t N = 0;
 	const std::vector<std::string> V;
@@ -90,7 +121,7 @@ class NaiveBayes
 public:
 
 
-	NaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<Eigen::Array2i>> trainingIndices, const std::set<std::string>& vocabulary) : V{vocabulary.cbegin(), vocabulary.cend()}
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<Eigen::Array2i>> trainingIndices, const std::set<std::string>& vocabulary) : V{vocabulary.cbegin(), vocabulary.cend()}
 	{
 		/*for (size_t i = 0; i < metadata; i++)
 		{
@@ -102,7 +133,7 @@ public:
 		for (size_t i = 0; i < n_classes; i++)
 		{
 			const auto& classIndices = trainingIndices[i];
-			Eigen::Index n_docs_in_class = 0;
+			int n_docs_in_class = 0;
 			for (const auto& indices : classIndices)
 			{
 				const auto start = indices(0);
@@ -133,6 +164,8 @@ public:
 				std::string token;
 				while (tokens >> token)
 				{
+
+					//TODO: for feature selection, will need to modify sumOccurrences here to only accumulate tokens that are in V
 					++occurrences[token];
 					++sumOccurrences;
 				}
@@ -149,7 +182,7 @@ public:
 				{
 					T_tc = occurrences.at(t);
 				}
-				catch (const std::out_of_range& ex)
+				catch (const std::out_of_range&)
 				{
 					T_tc = 0;
 				}
@@ -163,16 +196,42 @@ public:
 			}
 		}
 
+		//Store probabilities as logs in advance
+		prior = prior.log();
+		condProb = condProb.log();
+	}
 
+	Eigen::Index classify(const std::string& d)
+	{
+		std::stringstream tokens{ d };
 
+		//TODO: do reductions to lowercase, punctuation, etc, in-program instead, and do it here as well as in the training
+		std::string token;
+		Eigen::ArrayXd scores = prior;
 
+		//Logs already taken
+		while (tokens >> token)
+		{
+			const auto& res = std::lower_bound(V.cbegin(), V.cend(), token);
+			if (*res != token)
+			{
+				continue;
+			}
+			const auto t = std::distance(V.cbegin(), res);
+
+			for (Eigen::Index c = 0; c < prior.size(); c++)
+			{
+				scores(c) += condProb(t, c);
+			}
+		}
+		Eigen::Index winner;
+		scores.maxCoeff(&winner);
+
+		return winner;
 	}
 
 	//Trains using entire metadata set
-	NaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& vocabulary) : NaiveBayes{ metadata, train_all(metadata), vocabulary }
-	{
-
-	}
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& vocabulary) : MultinomialNaiveBayes{ metadata, train_all(metadata), vocabulary } {	}
 
 };
 
@@ -306,7 +365,9 @@ int __cdecl main(int argc, char* argv[])
 	const auto folds = get_m_fold_slices(metadata, 10);
 
 
-	NaiveBayes all{ metadata , V };
+	MultinomialNaiveBayes all{ metadata , V };
+	std::string test = "logic programming environments for large knowledge bases a practical perspective abstract";
+	std::cout << test << ": " << all.classify(test);
 
 	//std::vector<std::vector<std::pair<it, it>>> = mFoldCrossValidate(metadata, 10);
 
