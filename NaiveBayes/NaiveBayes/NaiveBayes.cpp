@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <fstream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -83,37 +84,92 @@ Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
 class NaiveBayes
 {
 	int64_t N = 0;
-	std::vector<int64_t> n_docs_in_class;
+	const std::vector<std::string> V;
+	Eigen::ArrayXd prior;
+	Eigen::ArrayXXd condProb;
 public:
 
 
-	template <typename T>
-	NaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<T>> trainingIndices)
+	NaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<Eigen::Array2i>> trainingIndices, const std::set<std::string>& vocabulary) : V{vocabulary.cbegin(), vocabulary.cend()}
 	{
 		/*for (size_t i = 0; i < metadata; i++)
 		{
 
 		}*/
 		const auto n_classes = metadata.size();
+		Eigen::ArrayXd Nc{ n_classes };
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
 			const auto& classIndices = trainingIndices[i];
-			Eigen::Index Nc = 0;
+			Eigen::Index n_docs_in_class = 0;
 			for (const auto& indices : classIndices)
 			{
 				const auto start = indices(0);
 				const auto end = indices(1);
-				Nc += end - start;
+				n_docs_in_class += end - start;
 			}
-			n_docs_in_class.emplace_back(Nc);
-			N += Nc;
+			Nc(i) = n_docs_in_class;
+			N += n_docs_in_class;
+			
+
 		}
+
+		//Now we have N, Nc, and V.  Priors are calculated for all classes here.
+		prior = Nc / static_cast<double>(N);
+
+		//Initialize conditional probabilities
+		condProb = Eigen::ArrayXXd{ V.size(), n_classes };
+
+		for (size_t i = 0; i < n_classes; i++)
+		{
+			std::map<std::string, int> occurrences;
+			int64_t sumOccurrences = 0;
+
+			for (const auto& point : metadata[i].second)
+			{
+				const auto& doc = point.second;
+				std::stringstream tokens{ doc };
+				std::string token;
+				while (tokens >> token)
+				{
+					++occurrences[token];
+					++sumOccurrences;
+				}
+			}
+
+			//Include laplace smoothing
+			const auto denominator = sumOccurrences + V.size();
+
+			Eigen::Index tIndex = 0;
+			for (const auto& t : V)
+			{
+				int T_tc;
+				try
+				{
+					T_tc = occurrences.at(t);
+				}
+				catch (const std::out_of_range& ex)
+				{
+					T_tc = 0;
+				}
+
+				//Include laplace smoothing
+				const auto numerator = T_tc + 1;
+
+				condProb(tIndex, i) = static_cast<double>(numerator) / static_cast<double>(denominator);
+
+				tIndex++;
+			}
+		}
+
+
+
 
 	}
 
 	//Trains using entire metadata set
-	NaiveBayes(const std::vector<ClassMetadata>& metadata) : NaiveBayes{ metadata, train_all(metadata) }
+	NaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& vocabulary) : NaiveBayes{ metadata, train_all(metadata), vocabulary }
 	{
 
 	}
@@ -234,19 +290,23 @@ int __cdecl main(int argc, char* argv[])
 
 	}
 
-	//std::vector<ClassMetadata> metadata;
-
 	std::vector<ClassMetadata> metadata;
 
+
+	//Create vocabulary from all data rather than just the training indices specified
+	std::set<std::string> V;
+	//extract_vocabulary(metadata[i].second, V);
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
 		metadata.emplace_back(file.first, class_metadata);
+		extract_vocabulary(class_metadata, V);
 	}
 
 	const auto folds = get_m_fold_slices(metadata, 10);
 
-	NaiveBayes all{ metadata };
+
+	NaiveBayes all{ metadata , V };
 
 	//std::vector<std::vector<std::pair<it, it>>> = mFoldCrossValidate(metadata, 10);
 
