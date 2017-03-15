@@ -17,6 +17,9 @@ using PaperID = int64_t;
 using Point = std::pair<PaperID, std::string>;
 using ClassMetadata = std::pair<std::string, std::vector<Point>>;
 
+template <typename T>
+using Vec = std::vector<T, Eigen::aligned_allocator<T>>;
+
 std::vector<Point> consume_metadata(const std::string& filename)
 {
 	std::vector<Point> points;
@@ -59,15 +62,28 @@ void extract_vocabulary(const std::vector<Point>& metadata, std::set<std::string
 	}
 }
 
+void extract_vocabulary(const std::vector<Point>& metadata, Vec<Eigen::Array2i> indices, std::set<std::string>& vocabulary)
+{
+	//for (const auto& docs : metadata)
+	for (const auto& range : indices)
+	for (int i = range(0); i < range(1); i++)
+	{
+		const auto& doc = metadata[i].second;
+		std::stringstream tokens{ doc };
+		std::string token;
+		while (tokens >> token)
+		{
+			vocabulary.emplace(token);
+		}
+	}
+}
+
 /*
 Eigen::VectorXi count_occurrences(const std::vector<Point>& metadata, const std::set<std::string>& vocabulary)
 {
 
 }
 */
-
-template <typename T>
-using Vec = std::vector<T, Eigen::aligned_allocator<T>>;
 
 Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
 {
@@ -85,18 +101,28 @@ Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
 class MultinomialNaiveBayes
 {
 	int64_t N = 0;
-	const std::vector<std::string> V;
+	std::vector<std::string> V;
 	Eigen::ArrayXd prior;
 	Eigen::ArrayXXd condProb;
 public:
 
 
-	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<Eigen::Array2i>> trainingIndices, const std::set<std::string>& vocabulary) : V{vocabulary.cbegin(), vocabulary.cend()}
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, Vec<Vec<Eigen::Array2i>> trainingIndices, const std::set<std::string>& selected_features)
 	{
-		/*for (size_t i = 0; i < metadata; i++)
-		{
 
-		}*/
+		//Initialize vocabulary (specific to this training set)
+		std::set<std::string> vocabulary;
+
+		for (size_t c = 0; c < metadata.size(); c++)
+		{
+			const auto& class_metadata = metadata[c].second;
+			extract_vocabulary(class_metadata, trainingIndices[c], vocabulary);
+		}
+
+
+		V = std::vector<std::string>{ vocabulary.begin(), vocabulary.end() };
+
+
 		const auto n_classes = metadata.size();
 		Eigen::ArrayXd Nc{ n_classes };
 
@@ -187,16 +213,23 @@ public:
 		while (tokens >> token)
 		{
 			const auto& res = std::lower_bound(V.cbegin(), V.cend(), token);
-			if (*res != token)
+			if (res == V.cend())
 			{
 				//TODO: if word is not in vocabulary, then compute probability accordingly (currently the word is ignored)
+				/*for (Eigen::Index c = 0; c < prior.size(); c++)
+				{
+					scores(c) += std::log(1 / V.size());
+				}*/
 				continue;
 			}
-			const auto t = std::distance(V.cbegin(), res);
-
-			for (Eigen::Index c = 0; c < prior.size(); c++)
+			else
 			{
-				scores(c) += condProb(t, c);
+				const auto t = std::distance(V.cbegin(), res);
+
+				for (Eigen::Index c = 0; c < prior.size(); c++)
+				{
+					scores(c) += condProb(t, c);
+				}
 			}
 		}
 		Eigen::Index winner;
@@ -206,7 +239,7 @@ public:
 	}
 
 	//Trains using entire metadata set
-	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& vocabulary) : MultinomialNaiveBayes{ metadata, train_all(metadata), vocabulary } {	}
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& selected_features) : MultinomialNaiveBayes{ metadata, train_all(metadata), selected_features } {	}
 
 };
 
@@ -331,20 +364,19 @@ int __cdecl main(int argc, char* argv[])
 
 
 	//Create vocabulary from all data rather than just the training indices specified (specify vocabulary here for feature selection later)
-	std::set<std::string> V;
-	//extract_vocabulary(metadata[i].second, V);
+	//std::set<std::string> V;
 	const Eigen::Index n_classes = static_cast<Eigen::Index>(metadata_files.size());
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
 		metadata.emplace_back(file.first, class_metadata);
-		extract_vocabulary(class_metadata, V);
+		//extract_vocabulary(class_metadata, V);
 	}
 
-
-	std::cout << "Begin 10-fold cross validation" << std::endl;
-
 	const auto M = 10;
+	std::cout << "Begin " << M << "-fold cross validation" << std::endl;
+
+
 	const auto folds = get_m_fold_slices(metadata, M);
 
 
@@ -356,7 +388,7 @@ int __cdecl main(int argc, char* argv[])
 		const auto trainingIndices = get_m_fold_training_indices(folds, i);
 		const auto testIndices = get_m_fold_testing_indices(folds, i);
 
-		MultinomialNaiveBayes classifier{ metadata, trainingIndices, V };
+		MultinomialNaiveBayes classifier{ metadata, trainingIndices, {} };
 
 		for (Eigen::Index c = 0; c < n_classes; c++)
 		{
