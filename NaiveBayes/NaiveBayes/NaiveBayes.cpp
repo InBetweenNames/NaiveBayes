@@ -3,6 +3,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/StdVector>
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <iterator>
@@ -19,6 +20,16 @@ using ClassMetadata = std::pair<std::string, std::vector<Point>>;
 
 template <typename T>
 using Vec = std::vector<T, Eigen::aligned_allocator<T>>;
+
+//Make the document lowercase and replace any punctuation characters from it with whitespace
+std::string transform_doc(const std::string& doc)
+{
+	std::string n = doc;
+	std::replace_if(n.begin(), n.end(), ::ispunct, ' ');
+	std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+
+	return n;
+}
 
 std::vector<Point> consume_metadata(const std::string& filename)
 {
@@ -40,7 +51,7 @@ std::vector<Point> consume_metadata(const std::string& filename)
 
 		PaperID paper_id = std::stoll(paper_id_raw, nullptr, 16);
 
-		points.emplace_back(paper_id, paper_title);
+		points.emplace_back(paper_id, paper_title); //TODO: change to transform_doc
 		metadata.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 	}
 
@@ -360,8 +371,8 @@ int __cdecl main(int argc, char* argv[])
 		for (Eigen::Index c = 0; c < n_classes; c++)
 		{
 			const Eigen::Array2i range = testIndices(0, c);
-			//std::cout << "Testing range:\n" << range << std::endl;
-			/*std::cout << "Training ranges:\n";
+			/*std::cout << "Testing range:\n" << range << std::endl;
+			std::cout << "Training ranges:\n";
 			for (const auto& C : trainingIndices)
 			{
 				std::cout << "class" << std::endl;
