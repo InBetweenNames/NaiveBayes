@@ -81,36 +81,6 @@ Vec<Vec<Eigen::Array2i>> train_all(const std::vector<ClassMetadata>& metadata)
 	return classes;
 }
 
-Eigen::Index vocab_to_index(const std::vector<std::string>& vocabulary, const std::string& token)
-{
-	//Take advantage of sorted vector -- do binary search
-	const auto n = vocabulary.size();
-	Eigen::Index lowerBound = 0;
-	Eigen::Index upperBound = n - 1;
-
-	Eigen::Index midpoint = 0;
-
-	do {
-		if (upperBound < lowerBound)
-		{
-			return -1;
-		}
-		midpoint = (lowerBound + upperBound) / 2;
-		if (vocabulary[midpoint] < token)
-		{
-			//Take second half
-			lowerBound = midpoint + 1;
-		}
-		else if (token < vocabulary[midpoint])
-		{
-			//Take first half
-			upperBound = midpoint - 1;
-		}
-
-	} while (vocabulary[midpoint] != token);
-
-	return midpoint;
-}
 
 class MultinomialNaiveBayes
 {
@@ -154,11 +124,15 @@ public:
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
+			const auto& ranges = trainingIndices[i];
 			std::map<std::string, int> occurrences;
 			int64_t sumOccurrences = 0;
 
-			for (const auto& point : metadata[i].second)
+			//for (const auto& point : metadata[i].second)
+			for (const auto& range : ranges)
+			for (size_t j = range(0); j < range(1); j++)
 			{
+				const auto& point = metadata[i].second[j];
 				const auto& doc = point.second;
 				std::stringstream tokens{ doc };
 				std::string token;
@@ -215,6 +189,7 @@ public:
 			const auto& res = std::lower_bound(V.cbegin(), V.cend(), token);
 			if (*res != token)
 			{
+				//TODO: if word is not in vocabulary, then compute probability accordingly (currently the word is ignored)
 				continue;
 			}
 			const auto t = std::distance(V.cbegin(), res);
@@ -270,28 +245,31 @@ Eigen::Array<Eigen::Array2i, -1, -1> get_m_fold_slices(const std::vector<ClassMe
 	return indices;
 }
 
-template <typename T>
-Vec<Eigen::Array2i> get_m_fold_training_indices(const T& indices, const Eigen::Index exclude)
+Vec<Vec<Eigen::Array2i>> get_m_fold_training_indices(const Eigen::Array<Eigen::Array2i, -1, -1>& indices, const Eigen::Index exclude)
 {
-	Vec<Eigen::Array2i> chunks;
+	Vec<Vec<Eigen::Array2i>> classChunks(indices.cols());
 
-	if (exclude != 0)
+	for (Eigen::Index c = 0; c < indices.cols(); c++)
 	{
-		Vector2i chunk = { indices(0)(0), indices(exclude - 1)(1) };
-		chunks.emplace_back(chunk);
+		auto& chunks = classChunks[c];
+
+		if (exclude != 0)
+		{
+			Eigen::Vector2i chunk = { indices(0, c)(0), indices(exclude - 1, c)(1) };
+			chunks.emplace_back(chunk);
+		}
+
+		if (exclude != indices.rows() - 1)
+		{
+			Eigen::Vector2i chunk = { indices(exclude + 1, c)(0), indices(indices.rows() - 1, c)(1) };
+			chunks.emplace_back(chunk);
+		}
 	}
 
-	if (exclude != indices.rows() - 1)
-	{
-		Vector2i chunk = { indices(exclude + 1)(0), indices(indices.rows() - 1)(1) };
-		chunks.emplace_back(chunk);
-	}
-
-	return chunks;
+	return classChunks;
 }
 
-template <typename T>
-Eigen::Array2i get_m_fold_testing_indices(const T& indices, const Eigen::Index include)
+Eigen::Array<Eigen::Array2i, 1, -1> get_m_fold_testing_indices(const Eigen::Array<Eigen::Array2i, -1, -1>& indices, const Eigen::Index include)
 {
 	return indices.row(include);
 }
@@ -352,9 +330,10 @@ int __cdecl main(int argc, char* argv[])
 	std::vector<ClassMetadata> metadata;
 
 
-	//Create vocabulary from all data rather than just the training indices specified
+	//Create vocabulary from all data rather than just the training indices specified (specify vocabulary here for feature selection later)
 	std::set<std::string> V;
 	//extract_vocabulary(metadata[i].second, V);
+	const Eigen::Index n_classes = static_cast<Eigen::Index>(metadata_files.size());
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
@@ -362,14 +341,60 @@ int __cdecl main(int argc, char* argv[])
 		extract_vocabulary(class_metadata, V);
 	}
 
-	const auto folds = get_m_fold_slices(metadata, 10);
+
+	std::cout << "Begin 10-fold cross validation" << std::endl;
+
+	const auto M = 10;
+	const auto folds = get_m_fold_slices(metadata, M);
 
 
-	MultinomialNaiveBayes all{ metadata , V };
-	std::string test = "logic programming environments for large knowledge bases a practical perspective abstract";
-	std::cout << test << ": " << all.classify(test);
+	Eigen::ArrayXXi confusionMatrix = Eigen::ArrayXXi::Zero(n_classes, n_classes);
+	//MultinomialNaiveBayes classifier{ metadata, V };
+	for (Eigen::Index i = 0; i < M; i++)
+	{
+		std::cout << "Fold " << (i + 1) << std::endl;
+		const auto trainingIndices = get_m_fold_training_indices(folds, i);
+		const auto testIndices = get_m_fold_testing_indices(folds, i);
 
-	//std::vector<std::vector<std::pair<it, it>>> = mFoldCrossValidate(metadata, 10);
+		MultinomialNaiveBayes classifier{ metadata, trainingIndices, V };
+
+		for (Eigen::Index c = 0; c < n_classes; c++)
+		{
+			const Eigen::Array2i range = testIndices(0, c);
+			//std::cout << "Testing range:\n" << range << std::endl;
+			/*std::cout << "Training ranges:\n";
+			for (const auto& C : trainingIndices)
+			{
+				std::cout << "class" << std::endl;
+				for (const auto& range : C)
+				{
+					std::cout << range << std::endl;
+				}
+			}*/
+			
+			for (Eigen::Index testDoc = range(0); testDoc < range(1); testDoc++)
+			{
+				const auto& doc = metadata[c].second[testDoc];
+				const auto& docTitle = doc.second; //TODO: perform reductions in here as well as in training
+
+				const auto resultClass = classifier.classify(docTitle);
+
+				confusionMatrix(c, resultClass)++;
+			}
+		}
+
+	}
+
+	std::cout << "Final confusion matrix:\n" << confusionMatrix << std::endl;
+
+	//m_fold_cross_validate(metadata, V)
+
+	//MultinomialNaiveBayes all{ metadata , V };
+	//std::string test = "logic programming environments for large knowledge bases a practical perspective abstract";
+	//std::cout << test << ": " << all.classify(test);
+
+
+
 
     return 0;
 }
