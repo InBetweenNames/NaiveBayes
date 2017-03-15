@@ -16,7 +16,7 @@
 
 using PaperID = int64_t;
 using Point = std::pair<PaperID, std::string>;
-using ClassMetadata = std::pair<std::string, std::vector<Point>>;
+using ClassMetadata = std::tuple<std::string, std::vector<Point>, std::map<std::string, int>>;
 
 template <typename T>
 using Vec = std::vector<T, Eigen::aligned_allocator<T>>;
@@ -31,9 +31,10 @@ std::string transform_doc(const std::string& doc)
 	return n;
 }
 
-std::vector<Point> consume_metadata(const std::string& filename)
+std::pair<std::vector<Point>, std::map<std::string, int>> consume_metadata(const std::string& filename)
 {
 	std::vector<Point> points;
+	std::map<std::string, int> tokenDocCount;
 
 	std::ifstream metadata{ filename };
 
@@ -52,10 +53,23 @@ std::vector<Point> consume_metadata(const std::string& filename)
 		PaperID paper_id = std::stoll(paper_id_raw, nullptr, 16);
 
 		points.emplace_back(paper_id, paper_title); //TODO: change to transform_doc
+
 		metadata.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+		std::stringstream tokens{ paper_title };
+		std::string token;
+		std::set<std::string> token_set;
+		while (tokens >> token)
+		{
+			token_set.emplace(token);
+		}
+		for (const auto& t : token_set)
+		{
+			++tokenDocCount[t];
+		}
 	}
 
-	return points;
+	return { points, tokenDocCount };
 }
 
 //Extract all words from a vector of metadata and add them to a vocabulary set
@@ -79,7 +93,7 @@ std::set<std::string> vocabulary(const std::vector<ClassMetadata>& metadata)
 
 	for (size_t c = 0; c < metadata.size(); c++)
 	{
-		const auto& class_metadata = metadata[c].second;
+		const auto& class_metadata = std::get<1>(metadata[c]);
 		extract_vocabulary(class_metadata, vocabulary);
 	}
 
@@ -110,8 +124,8 @@ public:
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
-			Nc(i) = metadata[i].second.size();
-			N += metadata[i].second.size();
+			Nc(i) = std::get<1>(metadata[i]).size();
+			N += std::get<1>(metadata[i]).size();
 		}
 
 		//Now we have N, Nc, and V.  Priors are calculated for all classes here.
@@ -125,7 +139,7 @@ public:
 			std::map<std::string, int> occurrences;
 			int64_t sumOccurrences = 0;
 
-			for (const auto& point : metadata[i].second)
+			for (const auto& point : std::get<1>(metadata[i]))
 			{
 				const auto& doc = point.second;
 				std::stringstream tokens{ doc };
@@ -215,7 +229,7 @@ Eigen::Array<Eigen::Array2i, -1, -1> get_m_fold_slices(const std::vector<ClassMe
 
 	for (int i = 0; i < n_classes; i++)
 	{
-		const auto Nc = metadata[i].second.size();
+		const auto Nc = std::get<1>(metadata[i]).size();
 		const auto n_per_fold = Nc / M;
 		//const auto n_per_fold_r = Nc % M;
 
@@ -272,6 +286,101 @@ Eigen::Array<Eigen::Array2i, 1, -1> get_m_fold_testing_indices(const Eigen::Arra
 	return indices.row(include);
 }
 
+
+Eigen::Array22d count_occurrences_map(const std::string& t, const std::vector<ClassMetadata>& metadata, size_t i)
+{
+	Eigen::Array22d N = Eigen::Array22d::Zero();
+	const int NClassDocs = static_cast<int>(std::get<1>(metadata[i]).size());
+	int NComplementClassDocs = 0;
+
+	try
+	{
+		N(1, 1) = std::get<2>(metadata[i]).at(t);
+	}
+	catch (const std::out_of_range&)
+	{
+	}
+
+	for (size_t c = 0; c < metadata.size(); c++)
+	{
+		if (c == i)
+		{
+			continue;
+		}
+
+		NComplementClassDocs += static_cast<int>(std::get<1>(metadata[c]).size());
+		try
+		{
+			N(1, 0) += std::get<2>(metadata[c]).at(t);
+		}
+		catch (const std::out_of_range&)
+		{
+		}
+	}
+
+	N(0, 1) = NClassDocs - N(1,1);
+	N(0, 0) = NComplementClassDocs - N(1, 0);
+
+	return N;
+}
+
+double mi_corner(const double NDocs, const Eigen::Array22d& N, int i, int j)
+{
+	const auto numerator = NDocs*N(i, j);
+	const auto denominator = N.row(i).sum()*N.col(j).sum();
+	const auto res = (N(i, j) / NDocs)*std::log2(numerator / denominator);
+
+	return res;
+}
+
+//Returns a vector of vectors each corresponding to each class, each class's vector will contain a sorted list of features from top score to bottom
+std::vector<std::vector<std::string>> mutual_information(const std::vector<ClassMetadata>& metadata)
+{
+	const auto V = vocabulary(metadata);
+	std::vector<std::vector<std::string>> features;
+
+	//Only compute MI for one class in the 2 class case (both MI counts will be equivalent)
+	size_t max = metadata.size();
+	if (metadata.size() == 2)
+	{
+		max = 1;
+	}
+	for (size_t i = 0; i < max; i++)
+	{
+		std::vector<std::string> rankedFeatures;
+		std::multimap<double, std::string, std::greater<double>> ranks;
+
+		for (const auto& t : V)
+		{
+			//const auto Ncol1 = count_occurrences(t, metadata, i);
+			//const auto Ncol2 = count_occurrences_other(t, metadata, i);
+
+			/*Eigen::Array22d N;
+			N(1, 1) = Ncol1.first;
+			N(0, 1) = Ncol1.second;
+			N(1, 0) = Ncol2.first;
+			N(0, 0) = Ncol2.second;*/
+			const auto N = count_occurrences_map(t, metadata, i);
+
+			const auto NDocs = N.sum();
+
+			double I = mi_corner(NDocs, N, 1, 1) + mi_corner(NDocs, N, 0, 1) + mi_corner(NDocs, N, 1, 0) + mi_corner(NDocs, N, 0, 0);
+			if (!std::isnan(I))
+			{
+				ranks.emplace(I, t);
+			}
+		}
+
+		for (const auto& rank : ranks)
+		{
+			rankedFeatures.emplace_back(rank.second);
+		}
+		features.emplace_back(rankedFeatures);
+	}
+
+	return features;
+}
+
 int __cdecl main(int argc, char* argv[])
 {
 	std::vector<std::pair<std::string, std::string>> metadata_files;
@@ -305,6 +414,7 @@ int __cdecl main(int argc, char* argv[])
 				}
 				catch (...)
 				{
+					n_features = 100;
 					start_index = 2;
 				}
 			}
@@ -327,16 +437,33 @@ int __cdecl main(int argc, char* argv[])
 
 	std::vector<ClassMetadata> metadata;
 
-
 	//Load in metadata from each file
 	const Eigen::Index n_classes = static_cast<Eigen::Index>(metadata_files.size());
-	int c = 0;
+	int cl = 0;
 	for (const auto& file : metadata_files)
 	{
 		const auto& class_metadata = consume_metadata(file.second);
-		metadata.emplace_back(file.first, class_metadata);
-		std::cout << "Loading " << file.first << " (class " << c << ") " << file.second << std::endl;
-		c++;
+		metadata.emplace_back(file.first, class_metadata.first, class_metadata.second);
+		std::cout << "Loading " << file.first << " (class " << cl << ") " << file.second << std::endl;
+		cl++;
+	}
+
+	if (n_features > 0)
+	{
+		std::cout << "Performing feature selection" << std::endl;
+
+		const auto features = mutual_information(metadata);
+
+		const auto sz = metadata.size() == 2 ? 1 : metadata.size();
+		for (size_t c = 0; c < sz; c++) {
+			std::cout << "Best features for class " << c << ": " << std::endl;
+			const auto& fs = features[c];
+			for (const auto& f : fs)
+			{
+				std::cout << f << std::endl;
+			}
+		}
+		//features[c].range(0, n_features)
 	}
 
 	const auto M = 10;
@@ -361,9 +488,9 @@ int __cdecl main(int argc, char* argv[])
 			for (const auto& range : trainingIndices[c1])
 			for (size_t p1 = range(0); p1 < range(1); p1++)
 			{
-				trainingPoints.emplace_back(metadata[c1].second[p1]);
+				trainingPoints.emplace_back(std::get<1>(metadata[c1])[p1]);
 			}
-			test_metadata.emplace_back(metadata[c1].first, trainingPoints);
+			test_metadata.emplace_back(std::get<0>(metadata[c1]), trainingPoints, std::get<2>(metadata[c1]));
 		}
 
 		MultinomialNaiveBayes classifier{ test_metadata };
@@ -384,7 +511,7 @@ int __cdecl main(int argc, char* argv[])
 			
 			for (Eigen::Index testDoc = range(0); testDoc < range(1); testDoc++)
 			{
-				const auto& doc = metadata[c].second[testDoc];
+				const auto& doc = std::get<1>(metadata[c])[testDoc];
 				const auto& docTitle = doc.second; //TODO: perform reductions in here as well as in training
 
 				const auto resultClass = classifier.classify(docTitle);
