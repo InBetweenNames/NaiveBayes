@@ -107,18 +107,35 @@ class MultinomialNaiveBayes
 {
 	int64_t N = 0;
 	std::vector<std::string> V;
+	std::vector<std::string> classNames;
 	Eigen::ArrayXd prior;
 	Eigen::ArrayXXd condProb;
 public:
 
-	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata) : MultinomialNaiveBayes{ metadata, vocabulary(metadata) } {}
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata) : MultinomialNaiveBayes{ metadata, {} } {}
 
-	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& vocabulary)
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& vocab)
 	{
 
 		//Initialize vocabulary (specific to this training set)
 
-		V = vocabulary;
+		if (vocab.empty())
+		{
+			V = vocabulary(metadata);
+		}
+		else
+		{
+			//Take union of provided vocabulary and metadata vocabulary (keeps math correct)
+			const auto V_ = vocabulary(metadata);
+			for (const auto& v : vocab)
+			{
+				if (std::find(V_.cbegin(), V_.cend(), v) != V_.cend())
+				{
+					V.emplace_back(v);
+				}
+			}
+		}
+
 
 
 		const auto n_classes = metadata.size();
@@ -128,6 +145,7 @@ public:
 		{
 			Nc(i) = std::get<1>(metadata[i]).size();
 			N += std::get<1>(metadata[i]).size();
+			classNames.emplace_back(std::get<0>(metadata[i]));
 		}
 
 		//Now we have N, Nc, and V.  Priors are calculated for all classes here.
@@ -222,6 +240,44 @@ public:
 		scores.maxCoeff(&winner);
 
 		return winner;
+	}
+
+	void serialize(std::ofstream& dat)
+	{
+		//Write classifier parameters to file
+		//File format:
+		/*
+		* Line: N (integer) -- number of terms
+		* Line: C (integer) -- number of classes
+		* Line(N): terms
+		* Line(C): class names
+		* Line: priors[1..N] -- prior probabilities, space delimited (pre logged)
+		* Line--onwards: condProb[C][t] -- condProbs of classes, one per line (pre logged)
+		*/
+
+		dat << V.size() << std::endl;
+		dat << prior.size() << std::endl;
+		for (const auto& t : V)
+		{
+			dat << t << std::endl;
+		}
+		for (const auto& c : classNames)
+		{
+			dat << c << std::endl;
+		}
+		for (Eigen::Index i = 0; i < prior.size(); i++)
+		{
+			dat << prior(i) << " ";
+		}
+		dat << std::endl;
+		for (Eigen::Index i = 0; i < condProb.cols(); i++)
+		{
+			for (Eigen::Index j = 0; j < condProb.rows(); j++)
+			{
+				dat << condProb(j, i) << " ";
+			}
+			dat << std::endl;
+		}
 	}
 
 };
@@ -345,10 +401,10 @@ std::vector<std::vector<std::string>> mutual_information(const std::vector<Class
 
 	//Only compute MI for one class in the 2 class case (both MI counts will be equivalent)
 	size_t max = metadata.size();
-	if (metadata.size() == 2)
+	/*if (metadata.size() == 2)
 	{
 		max = 1;
-	}
+	}*/
 	for (size_t i = 0; i < max; i++)
 	{
 		std::vector<std::string> rankedFeatures;
@@ -389,10 +445,68 @@ std::vector<std::vector<std::string>> mutual_information(const std::vector<Class
 	return features;
 }
 
+Eigen::Array22i perform_m_fold_cross_validation(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& selected_features, const int M)
+{
+	const auto n_classes = metadata.size();
+	const auto folds = get_m_fold_slices(metadata, M);
+
+	Eigen::ArrayXXi confusionMatrix = Eigen::ArrayXXi::Zero(n_classes, n_classes);
+	//MultinomialNaiveBayes classifier{ metadata, V };
+	for (Eigen::Index i = 0; i < M; i++)
+	{
+		//std::cout << "Fold " << (i + 1) << std::endl;
+		const auto trainingIndices = get_m_fold_training_indices(folds, i);
+		const auto testIndices = get_m_fold_testing_indices(folds, i);
+
+		std::vector<ClassMetadata> test_metadata;
+		for (size_t c1 = 0; c1 < metadata.size(); c1++)
+		{
+			std::vector<Point> trainingPoints;
+			for (const auto& range : trainingIndices[c1])
+				for (size_t p1 = range(0); p1 < range(1); p1++)
+				{
+					trainingPoints.emplace_back(std::get<1>(metadata[c1])[p1]);
+				}
+			test_metadata.emplace_back(std::get<0>(metadata[c1]), trainingPoints, std::get<2>(metadata[c1]));
+		}
+
+		MultinomialNaiveBayes classifier{ test_metadata, selected_features };
+
+		for (Eigen::Index c = 0; c < n_classes; c++)
+		{
+			const Eigen::Array2i range = testIndices(0, c);
+			/*std::cout << "Testing range:\n" << range << std::endl;
+			std::cout << "Training ranges:\n";
+			for (const auto& C : trainingIndices)
+			{
+			std::cout << "class" << std::endl;
+			for (const auto& range : C)
+			{
+			std::cout << range << std::endl;
+			}
+			}*/
+
+			for (Eigen::Index testDoc = range(0); testDoc < range(1); testDoc++)
+			{
+				const auto& doc = std::get<1>(metadata[c])[testDoc];
+				const auto& docTitle = doc.second; //TODO: perform reductions in here as well as in training
+
+				const auto resultClass = classifier.classify(docTitle);
+
+				confusionMatrix(c, resultClass)++;
+			}
+		}
+
+	}
+
+	return confusionMatrix;
+}
+
 int __cdecl main(int argc, char* argv[])
 {
 	std::vector<std::pair<std::string, std::string>> metadata_files;
 	int n_features = 0;
+	bool optimize = false;
 	if (argc < 2)
 	{
 		metadata_files.emplace_back("icse", "metadata/icse_id.txt");
@@ -406,7 +520,8 @@ int __cdecl main(int argc, char* argv[])
 		{
 			if (argc < 3)
 			{
-				n_features = 100; //Default to selecting 100 features
+				//n_features = 100; //Default to selecting 100 features
+				optimize = true;
 				start_index = 2;
 			}
 			else
@@ -422,7 +537,8 @@ int __cdecl main(int argc, char* argv[])
 				}
 				catch (...)
 				{
-					n_features = 100;
+					//n_features = 100;
+					optimize = true;
 					start_index = 2;
 				}
 			}
@@ -431,6 +547,8 @@ int __cdecl main(int argc, char* argv[])
 		{
 			std::cout << "Usage: " << argv[0] << " (--selectfeatures (<n>)) [class1 class1filename class2 class2filename ... classN classNfilename]" << std::endl;
 			std::cout << "If no arguments are provided, this command line will be run:\n\t" << argv[0] << " --selectfeatures 100 icse metadata/icse_id.txt vldb metadata/vldb_id.txt" << std::endl;
+			std::cout << "If --selectfeatures is provided, then an M-fold cross validation test will be run to determine the optimal feature size" << std::endl;
+			std::cout << "If --selectfeatures <N> is provided, a classifier will be built with the N best features and written out to classifier.dat" << std::endl;
 
 			return 0;
 		}
@@ -458,7 +576,7 @@ int __cdecl main(int argc, char* argv[])
 
 	std::vector<std::string> selected_features;
 
-	if (n_features > 0)
+	if (n_features > 0 || optimize)
 	{
 		std::cout << "Performing feature selection" << std::endl;
 
@@ -467,84 +585,104 @@ int __cdecl main(int argc, char* argv[])
 		const auto sz = metadata.size() == 2 ? 1 : metadata.size();
 		for (size_t c = 0; c < sz; c++) {
 			//std::cout << "Best " << n_features << " features for class " << c << ": " << std::endl;
-			const auto& fs = features[c];
-			for (size_t f = 0; f < n_features && f < features[c].size(); f++)
+			/*for (size_t f = 0; f < n_features && f < features[c].size(); f++)
 			{
 				//std::cout << features[c][f] << std::endl;
 				selected_features.emplace_back(features[c][f]);
-			}
-		}
-	}
-
-	const auto M = 10;
-	std::cout << "Begin " << M << "-fold cross validation" << std::endl;
-
-
-	const auto folds = get_m_fold_slices(metadata, M);
-
-
-	Eigen::ArrayXXi confusionMatrix = Eigen::ArrayXXi::Zero(n_classes, n_classes);
-	//MultinomialNaiveBayes classifier{ metadata, V };
-	for (Eigen::Index i = 0; i < M; i++)
-	{
-		std::cout << "Fold " << (i + 1) << std::endl;
-		const auto trainingIndices = get_m_fold_training_indices(folds, i);
-		const auto testIndices = get_m_fold_testing_indices(folds, i);
-
-		std::vector<ClassMetadata> test_metadata;
-		for (size_t c1 = 0; c1 < metadata.size(); c1++)
-		{
-			std::vector<Point> trainingPoints;
-			for (const auto& range : trainingIndices[c1])
-			for (size_t p1 = range(0); p1 < range(1); p1++)
-			{
-				trainingPoints.emplace_back(std::get<1>(metadata[c1])[p1]);
-			}
-			test_metadata.emplace_back(std::get<0>(metadata[c1]), trainingPoints, std::get<2>(metadata[c1]));
-		}
-
-		MultinomialNaiveBayes classifier{ test_metadata, selected_features };
-
-		for (Eigen::Index c = 0; c < n_classes; c++)
-		{
-			const Eigen::Array2i range = testIndices(0, c);
-			/*std::cout << "Testing range:\n" << range << std::endl;
-			std::cout << "Training ranges:\n";
-			for (const auto& C : trainingIndices)
-			{
-				std::cout << "class" << std::endl;
-				for (const auto& range : C)
-				{
-					std::cout << range << std::endl;
-				}
 			}*/
-			
-			for (Eigen::Index testDoc = range(0); testDoc < range(1); testDoc++)
-			{
-				const auto& doc = std::get<1>(metadata[c])[testDoc];
-				const auto& docTitle = doc.second; //TODO: perform reductions in here as well as in training
 
-				const auto resultClass = classifier.classify(docTitle);
-
-				confusionMatrix(c, resultClass)++;
-			}
+			//TODO: only works for 2 classes
+			selected_features = features[c];
 		}
-
 	}
 
-	std::cout << "Final confusion matrix:\n" << confusionMatrix << std::endl;
 
-	double tp = confusionMatrix(0, 0);
-	double fn = confusionMatrix(0, 1);
-	double fp = confusionMatrix(1, 0);
-	double tn = confusionMatrix(1, 1);
+	if (optimize)
+	{
+		const auto M = 10;
+		//std::cout << "Begin " << M << "-fold cross validation" << std::endl;
 
-	double precision = tp / (tp + fp);
-	double recall = tp / (tp + fn);
-	double F1 = 2 * precision * recall / (precision + recall);
-	std::cout << "Precision: " << precision << std::endl;
-	std::cout << "Recall: " << recall << std::endl;
-	std::cout << "F1 measure: " << F1 << std::endl;
+		std::cout << "Performing 10-fold cross validation, testing a maximum of 1000 features, adding 10 features each iteration" << std::endl;
+		std::cout << "Writing results to file: output.csv" << std::endl;
+		std::ofstream output{ "output.csv" };
+		output << "n_features, F1, precision, recall, accuracy" << std::endl;
+
+
+		size_t test_n_features = 10;
+		double maxF1 = 0;
+		size_t best_n_features = 0;
+		while (test_n_features < 1000 && test_n_features < selected_features.size())
+		{
+			std::vector<std::string> chunk_features;
+			for (size_t ti = 0; ti < test_n_features; ti++)
+			{
+				chunk_features.emplace_back(selected_features[ti]);
+			}
+
+			const Eigen::Array22i confusionMatrix = perform_m_fold_cross_validation(metadata, chunk_features, M);
+
+			double tp = confusionMatrix(0, 0);
+			double fn = confusionMatrix(0, 1);
+			double fp = confusionMatrix(1, 0);
+			double tn = confusionMatrix(1, 1);
+
+			double precision = tp / (tp + fp);
+			double recall = tp / (tp + fn);
+			double accuracy = (tp + tn) / (tp + fp + tn + fn);
+			double F1 = 2 * precision * recall / (precision + recall);
+			if (F1 > maxF1)
+			{
+				maxF1 = F1;
+				best_n_features = test_n_features;
+			}
+			/*std::cout << "Precision: " << precision << std::endl;
+			std::cout << "Recall: " << recall << std::endl;
+			std::cout << "F1 measure: " << F1 << std::endl;
+
+
+			std::cout << "Final confusion matrix:\n" << confusionMatrix << std::endl;*/
+
+			output << test_n_features << ", " << F1 << ", " << precision << ", " << recall << ", " << accuracy << std::endl;
+
+			test_n_features += 10;
+
+		}
+
+		std::cout << "Best N features: " << best_n_features << " F1 score: " << maxF1 << std::endl;
+	}
+	else if (n_features > 0)
+	{
+		std::vector<std::string> chunk_features;
+		for (size_t ti = 0; ti < n_features; ti++)
+		{
+			chunk_features.emplace_back(selected_features[ti]);
+		}
+		MultinomialNaiveBayes classifier{ metadata, chunk_features };
+
+		std::cout << "Writing classifier out to classifier.dat" << std::endl;
+		std::ofstream dat{ "classifier.dat" };
+		classifier.serialize(dat);
+	}
+	else
+	{
+		std::cout << "Performing 10-fold cross validation with no feature selection" << std::endl;
+		const auto confusionMatrix = perform_m_fold_cross_validation(metadata, {}, 10);
+		double tp = confusionMatrix(0, 0);
+		double fn = confusionMatrix(0, 1);
+		double fp = confusionMatrix(1, 0);
+		double tn = confusionMatrix(1, 1);
+
+		double precision = tp / (tp + fp);
+		double recall = tp / (tp + fn);
+		double accuracy = (tp + tn) / (tp + fp + tn + fn);
+		double F1 = 2 * precision * recall / (precision + recall);
+
+		std::cout << "Confusion matrix:\n" << confusionMatrix << std::endl;
+		std::cout << "Precision: " << precision << std::endl;
+		std::cout << "Recall: " << recall << std::endl;
+		std::cout << "F1: " << F1 << std:: endl;
+		std::cout << "Accuracy: " << accuracy << std::endl;
+	}
 
 	//m_fold_cross_validate(metadata, V)
 
