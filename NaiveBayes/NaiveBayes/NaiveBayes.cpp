@@ -87,7 +87,7 @@ void extract_vocabulary(const std::vector<Point>& metadata, std::set<std::string
 	}
 }
 
-std::set<std::string> vocabulary(const std::vector<ClassMetadata>& metadata)
+std::vector<std::string> vocabulary(const std::vector<ClassMetadata>& metadata)
 {
 	std::set<std::string> vocabulary;
 
@@ -97,7 +97,9 @@ std::set<std::string> vocabulary(const std::vector<ClassMetadata>& metadata)
 		extract_vocabulary(class_metadata, vocabulary);
 	}
 
-	return vocabulary;
+	std::vector<std::string> V{ vocabulary.begin(), vocabulary.end() };
+
+	return V;
 
 }
 
@@ -111,12 +113,12 @@ public:
 
 	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata) : MultinomialNaiveBayes{ metadata, vocabulary(metadata) } {}
 
-	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::set<std::string>& vocabulary)
+	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& vocabulary)
 	{
 
 		//Initialize vocabulary (specific to this training set)
 
-		V = std::vector<std::string>{ vocabulary.begin(), vocabulary.end() };
+		V = vocabulary;
 
 
 		const auto n_classes = metadata.size();
@@ -194,7 +196,9 @@ public:
 		//Logs already taken
 		while (tokens >> token)
 		{
-			const auto& res = std::lower_bound(V.cbegin(), V.cend(), token);
+			//Oops, not necessarily sorted!
+			//const auto& res = std::lower_bound(V.cbegin(), V.cend(), token);
+			const auto& res = std::find(V.cbegin(), V.cend(), token);
 			if (res == V.cend())
 			{
 				//TODO: if word is not in vocabulary, then compute probability accordingly (currently the word is ignored)
@@ -369,6 +373,10 @@ std::vector<std::vector<std::string>> mutual_information(const std::vector<Class
 			{
 				ranks.emplace(I, t);
 			}
+			else
+			{
+				ranks.emplace(std::numeric_limits<double>::lowest(), t);
+			}
 		}
 
 		for (const auto& rank : ranks)
@@ -448,6 +456,8 @@ int __cdecl main(int argc, char* argv[])
 		cl++;
 	}
 
+	std::vector<std::string> selected_features;
+
 	if (n_features > 0)
 	{
 		std::cout << "Performing feature selection" << std::endl;
@@ -456,14 +466,14 @@ int __cdecl main(int argc, char* argv[])
 
 		const auto sz = metadata.size() == 2 ? 1 : metadata.size();
 		for (size_t c = 0; c < sz; c++) {
-			std::cout << "Best features for class " << c << ": " << std::endl;
+			//std::cout << "Best " << n_features << " features for class " << c << ": " << std::endl;
 			const auto& fs = features[c];
-			for (const auto& f : fs)
+			for (size_t f = 0; f < n_features && f < features[c].size(); f++)
 			{
-				std::cout << f << std::endl;
+				//std::cout << features[c][f] << std::endl;
+				selected_features.emplace_back(features[c][f]);
 			}
 		}
-		//features[c].range(0, n_features)
 	}
 
 	const auto M = 10;
@@ -493,7 +503,7 @@ int __cdecl main(int argc, char* argv[])
 			test_metadata.emplace_back(std::get<0>(metadata[c1]), trainingPoints, std::get<2>(metadata[c1]));
 		}
 
-		MultinomialNaiveBayes classifier{ test_metadata };
+		MultinomialNaiveBayes classifier{ test_metadata, selected_features };
 
 		for (Eigen::Index c = 0; c < n_classes; c++)
 		{
