@@ -9,6 +9,7 @@
 #include <iterator>
 #include <fstream>
 #include <map>
+#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -565,10 +566,15 @@ int __cdecl main(int argc, char* argv[])
 
 	//Load in metadata from each file
 	const Eigen::Index n_classes = static_cast<Eigen::Index>(metadata_files.size());
+
+	//Use a static seed to ensure consistency across different runs for randomizing the input metadata files
+	//Use seed 314159 (PI truncated)
 	int cl = 0;
 	for (const auto& file : metadata_files)
 	{
-		const auto& class_metadata = consume_metadata(file.second);
+		std::mt19937 g{ 314159U };
+		auto class_metadata = consume_metadata(file.second);
+		std::shuffle(class_metadata.first.begin(), class_metadata.first.end(), g);
 		metadata.emplace_back(file.first, class_metadata.first, class_metadata.second);
 		std::cout << "Loading " << file.first << " (class " << cl << ") " << file.second << std::endl;
 		cl++;
