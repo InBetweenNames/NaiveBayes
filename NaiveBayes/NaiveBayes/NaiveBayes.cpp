@@ -391,7 +391,19 @@ double mi_corner(const double NDocs, const Eigen::Array22d& N, int i, int j)
 	const auto denominator = N.row(i).sum()*N.col(j).sum();
 	const auto res = (N(i, j) / NDocs)*std::log2(numerator / denominator);
 
-	return res;
+	//In information theory, 0*log(0) = 0.  But in C++, log(0) = NaN, so 0*NaN = NaN in C++.  Correct this behaviour for this instance.
+
+	//If N(i,j) = 0, then numerator = 0, and 0*log(0) is evaluated (will be NaN in C++).
+	//Conversely, if res is NaN, then log(0) was evaluated, and this can only be the case if numerator = 0, which implies N(i, j) is zero since NDocs is always nonzero.
+	//Hence checking N(i,j) = 0 is necessary and sufficient to detect all cases where 0log(0) is evaluated.
+	if (N(i, j) == 0)
+	{
+		return 0;
+	}
+	else
+	{
+		return res;
+	}
 }
 
 //Returns a vector of vectors each corresponding to each class, each class's vector will contain a sorted list of features from top score to bottom
@@ -432,7 +444,7 @@ std::vector<std::vector<std::pair<std::string, double>>> mutual_information(cons
 			}
 			else
 			{
-				ranks.emplace(std::numeric_limits<double>::lowest(), t);
+				throw std::runtime_error("NaN observed -- should never happen");
 			}
 		}
 
