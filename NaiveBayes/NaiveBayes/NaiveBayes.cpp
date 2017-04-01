@@ -395,10 +395,10 @@ double mi_corner(const double NDocs, const Eigen::Array22d& N, int i, int j)
 }
 
 //Returns a vector of vectors each corresponding to each class, each class's vector will contain a sorted list of features from top score to bottom
-std::vector<std::vector<std::string>> mutual_information(const std::vector<ClassMetadata>& metadata)
+std::vector<std::vector<std::pair<std::string, double>>> mutual_information(const std::vector<ClassMetadata>& metadata)
 {
 	const auto V = vocabulary(metadata);
-	std::vector<std::vector<std::string>> features;
+	std::vector<std::vector<std::pair<std::string, double>>> features;
 
 	//Only compute MI for one class in the 2 class case (both MI counts will be equivalent)
 	size_t max = metadata.size();
@@ -408,7 +408,7 @@ std::vector<std::vector<std::string>> mutual_information(const std::vector<Class
 	}*/
 	for (size_t i = 0; i < max; i++)
 	{
-		std::vector<std::string> rankedFeatures;
+		std::vector<std::pair<std::string, double>> rankedFeatures;
 		std::multimap<double, std::string, std::greater<double>> ranks;
 
 		for (const auto& t : V)
@@ -438,7 +438,7 @@ std::vector<std::vector<std::string>> mutual_information(const std::vector<Class
 
 		for (const auto& rank : ranks)
 		{
-			rankedFeatures.emplace_back(rank.second);
+			rankedFeatures.emplace_back(rank.second, rank.first);
 		}
 		features.emplace_back(rankedFeatures);
 	}
@@ -580,7 +580,7 @@ int __cdecl main(int argc, char* argv[])
 		cl++;
 	}
 
-	std::vector<std::string> selected_features;
+	std::vector<std::pair<std::string, double>> selected_features;
 
 	if (n_features > 0 || optimize)
 	{
@@ -599,6 +599,14 @@ int __cdecl main(int argc, char* argv[])
 
 			//TODO: only works for 2 classes
 			selected_features = features[c];
+		}
+
+		std::cout << "Writing sorted features to file: features.csv" << std::endl;
+		std::ofstream features_file{ "features.csv" };
+
+		for (const auto& f : selected_features)
+		{
+			features_file << f.first << "," << f.second << std::endl;
 		}
 	}
 
@@ -622,7 +630,7 @@ int __cdecl main(int argc, char* argv[])
 			std::vector<std::string> chunk_features;
 			for (size_t ti = 0; ti < test_n_features; ti++)
 			{
-				chunk_features.emplace_back(selected_features[ti]);
+				chunk_features.emplace_back(selected_features[ti].first);
 			}
 
 			const Eigen::Array22i confusionMatrix = perform_m_fold_cross_validation(metadata, chunk_features, M);
@@ -661,7 +669,7 @@ int __cdecl main(int argc, char* argv[])
 		std::vector<std::string> chunk_features;
 		for (size_t ti = 0; ti < n_features; ti++)
 		{
-			chunk_features.emplace_back(selected_features[ti]);
+			chunk_features.emplace_back(selected_features[ti].first);
 		}
 		MultinomialNaiveBayes classifier{ metadata, chunk_features };
 
