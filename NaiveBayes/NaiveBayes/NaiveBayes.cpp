@@ -4,14 +4,18 @@
 #include <Eigen/Core>
 #include <Eigen/StdVector>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 
@@ -650,17 +654,82 @@ int __cdecl main(int argc, char* argv[])
 		const auto M = 10;
 		//std::cout << "Begin " << M << "-fold cross validation" << std::endl;
 
-		std::cout << "Performing 10-fold cross validation, testing a maximum of 1000 features, adding 10 features each iteration" << std::endl;
+		std::cout << "Performing 10-fold cross validation, adding 10 features each iteration" << std::endl;
 		std::cout << "Writing results to file: output.csv" << std::endl;
 		std::ofstream output{ "output.csv" };
 		output << "n_features, F1, precision, recall, accuracy" << std::endl;
 
+		const auto n_threads = std::thread::hardware_concurrency();
+		std::atomic<size_t> next_n_features{ 10 };
+		std::mutex file_m;
 
+		auto&& f = [&next_n_features,&selected_features,&metadata,&output,&file_m,M]()
+		{
+			bool running = true;
+			while (running)
+			{
+				const auto test_n_features = next_n_features.fetch_add(10, std::memory_order_relaxed);
+
+				if (test_n_features % 100)
+				{
+					std::cout << "Progress: %" << (static_cast<double>(test_n_features + 1) / selected_features.size()) * 100 << std::endl;
+				}
+
+				if (test_n_features > selected_features.size())
+				{
+					running = false;
+					return;
+				}
+
+				std::vector<std::string> chunk_features;
+				for (size_t ti = 0; ti < test_n_features; ti++)
+				{
+					chunk_features.emplace_back(selected_features[ti].first);
+				}
+
+				const Eigen::Array22i confusionMatrix = perform_m_fold_cross_validation(metadata, chunk_features, M);
+
+				double tp = confusionMatrix(0, 0);
+				double fn = confusionMatrix(0, 1);
+				double fp = confusionMatrix(1, 0);
+				double tn = confusionMatrix(1, 1);
+
+				double precision = tp / (tp + fp);
+				double recall = tp / (tp + fn);
+				double accuracy = (tp + tn) / (tp + fp + tn + fn);
+				double F1 = 2 * precision * recall / (precision + recall);
+
+				std::stringstream prebuf;
+
+				prebuf << test_n_features << ", " << F1 << ", " << precision << ", " << recall << ", " << accuracy;
+				file_m.lock();
+				output << prebuf.rdbuf() << std::endl;
+				file_m.unlock();
+
+			}
+		};
+
+		std::vector<std::thread> threads;
+		for (size_t i = 0; i < n_threads; i++)
+		{
+			threads.emplace_back(f);
+		}
+
+		for (size_t i = 0; i < n_threads; i++)
+		{
+			threads[i].join();
+		}
+
+		/*
 		size_t test_n_features = 10;
 		double maxF1 = 0;
 		size_t best_n_features = 0;
-		while (test_n_features < 1000 && test_n_features < selected_features.size())
+		while (test_n_features < selected_features.size())
 		{
+			if (test_n_features % 100)
+			{
+				std::cout << "Progress: %" << (static_cast<double>(test_n_features + 1) / selected_features.size()) * 100 << std::endl;
+			}
 			std::vector<std::string> chunk_features;
 			for (size_t ti = 0; ti < test_n_features; ti++)
 			{
@@ -683,20 +752,21 @@ int __cdecl main(int argc, char* argv[])
 				maxF1 = F1;
 				best_n_features = test_n_features;
 			}
-			/*std::cout << "Precision: " << precision << std::endl;
-			std::cout << "Recall: " << recall << std::endl;
-			std::cout << "F1 measure: " << F1 << std::endl;
-
-
-			std::cout << "Final confusion matrix:\n" << confusionMatrix << std::endl;*/
 
 			output << test_n_features << ", " << F1 << ", " << precision << ", " << recall << ", " << accuracy << std::endl;
 
-			test_n_features += 10;
-
+			if (selected_features.size() - test_n_features < 10)
+			{
+				test_n_features = selected_features.size();
+			}
+			else
+			{
+				test_n_features += 10;
+			}
 		}
 
 		std::cout << "Best N features: " << best_n_features << " F1 score: " << maxF1 << std::endl;
+		*/
 	}
 	else if (n_features > 0)
 	{
