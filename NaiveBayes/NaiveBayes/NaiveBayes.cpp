@@ -111,6 +111,9 @@ class MultinomialNaiveBayes
 	std::vector<std::string> classNames;
 	Eigen::ArrayXd prior;
 	Eigen::ArrayXXd condProb;
+
+	//Only needed for reporting purposes:
+	Eigen::ArrayXXi termCounts;
 public:
 
 	MultinomialNaiveBayes(const std::vector<ClassMetadata>& metadata) : MultinomialNaiveBayes{ metadata, {} } {}
@@ -144,7 +147,7 @@ public:
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
-			Nc(i) = std::get<1>(metadata[i]).size();
+			Nc(i) = static_cast<double>(std::get<1>(metadata[i]).size());
 			N += std::get<1>(metadata[i]).size();
 			classNames.emplace_back(std::get<0>(metadata[i]));
 		}
@@ -154,6 +157,9 @@ public:
 
 		//Initialize conditional probabilities
 		condProb = Eigen::ArrayXXd{ V.size(), n_classes };
+
+		//Initialize frequency table count (for reporting purposes)
+		termCounts = Eigen::ArrayXXi{ V.size(), n_classes };
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
@@ -176,17 +182,18 @@ public:
 			//Include laplace smoothing
 			const auto denominator = sumOccurrences + V.size();
 
-			Eigen::Index tIndex = 0;
-			for (const auto& t : V)
+			//Eigen::Index tIndex = 0;
+			//for (const auto& t : V)
+			for(size_t tIndex = 0; tIndex < V.size(); tIndex++)
 			{
-				int T_tc;
-				try
-				{
+				const auto& t = V[tIndex];
+				int T_tc = 0;
+
+				try {
 					T_tc = occurrences.at(t);
 				}
 				catch (const std::out_of_range&)
 				{
-					T_tc = 0;
 				}
 
 				//Include laplace smoothing
@@ -194,7 +201,7 @@ public:
 
 				condProb(tIndex, i) = static_cast<double>(numerator) / static_cast<double>(denominator);
 
-				tIndex++;
+				termCounts(tIndex, i) = T_tc;
 			}
 		}
 
@@ -277,6 +284,30 @@ public:
 				dat << condProb(j, i) << " ";
 			}
 			dat << std::endl;
+		}
+	}
+
+	void dump_frequencies(std::ofstream& counts)
+	{
+		counts << "term,";
+
+		for (size_t i = 0; i < classNames.size() - 1; i++)
+		{
+			counts << classNames[i] << ",";
+		}
+		counts << classNames[classNames.size() - 1] << std::endl;
+		
+		for (size_t tIndex = 0; tIndex < V.size(); tIndex++)
+		{
+			const auto& t = V[tIndex];
+
+			counts << t << ",";
+
+			for (size_t i = 0; i < classNames.size() - 1; i++)
+			{
+				counts << termCounts(tIndex, i) << ",";
+			}
+			counts << termCounts(tIndex, classNames.size() - 1) << std::endl;
 		}
 	}
 
@@ -484,7 +515,7 @@ Eigen::Array22i perform_m_fold_cross_validation(const std::vector<ClassMetadata>
 
 		MultinomialNaiveBayes classifier{ test_metadata, selected_features };
 
-		for (Eigen::Index c = 0; c < n_classes; c++)
+		for (size_t c = 0; c < n_classes; c++)
 		{
 			const Eigen::Array2i range = testIndices(0, c);
 			/*std::cout << "Testing range:\n" << range << std::endl;
@@ -688,6 +719,10 @@ int __cdecl main(int argc, char* argv[])
 		std::cout << "Writing classifier out to classifier.dat" << std::endl;
 		std::ofstream dat{ "classifier.dat" };
 		classifier.serialize(dat);
+
+		std::cout << "Writing out frequency counts for each term to frequency.csv" << std::endl;
+		std::ofstream freq{ "frequency.csv" };
+		classifier.dump_frequencies(freq);
 	}
 	else
 	{
