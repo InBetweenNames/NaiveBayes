@@ -126,7 +126,7 @@ public:
 		}
 		else
 		{
-			//Take union of provided vocabulary and metadata vocabulary (keeps math correct)
+			//Take intersection of provided vocabulary and metadata vocabulary (keeps math correct)
 			const auto V_ = vocabulary(metadata);
 			for (const auto& v : vocab)
 			{
@@ -165,9 +165,8 @@ public:
 				const auto& doc = point.second;
 				std::stringstream tokens{ doc };
 				std::string token;
-				while (tokens >> token)
+				while (tokens >> token && (std::find(V.cbegin(), V.cend(), token) != V.cend()))
 				{
-
 					//TODO: for feature selection, will need to modify sumOccurrences here to only accumulate tokens that are in V
 					++occurrences[token];
 					++sumOccurrences;
@@ -616,6 +615,7 @@ int __cdecl main(int argc, char* argv[])
 		std::cout << "Writing sorted features to file: features.csv" << std::endl;
 		std::ofstream features_file{ "features.csv" };
 
+		features_file << "feature,MI score" << std::endl;
 		for (const auto& f : selected_features)
 		{
 			features_file << f.first << "," << f.second << std::endl;
