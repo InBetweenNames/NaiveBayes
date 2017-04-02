@@ -112,7 +112,7 @@ class MultinomialNaiveBayes
 	Eigen::ArrayXd prior;
 	Eigen::ArrayXXd condProb;
 
-	//Only needed for reporting purposes:
+	//Entire table kept for reporting purposes
 	Eigen::ArrayXXi termCounts;
 public:
 
@@ -158,12 +158,12 @@ public:
 		//Initialize conditional probabilities
 		condProb = Eigen::ArrayXXd{ V.size(), n_classes };
 
-		//Initialize frequency table count (for reporting purposes)
-		termCounts = Eigen::ArrayXXi{ V.size(), n_classes };
+		//Initialize frequency table count
+		termCounts = Eigen::ArrayXXi::Zero( V.size(), n_classes );
 
 		for (size_t i = 0; i < n_classes; i++)
 		{
-			std::map<std::string, int> occurrences;
+			//std::map<std::string, int> occurrences;
 			int64_t sumOccurrences = 0;
 
 			for (const auto& point : std::get<1>(metadata[i]))
@@ -171,37 +171,28 @@ public:
 				const auto& doc = point.second;
 				std::stringstream tokens{ doc };
 				std::string token;
-				while (tokens >> token && (std::find(V.cbegin(), V.cend(), token) != V.cend()))
+
+				while (tokens >> token)
 				{
-					//TODO: for feature selection, will need to modify sumOccurrences here to only accumulate tokens that are in V
-					++occurrences[token];
-					++sumOccurrences;
+					const auto res = std::find(V.cbegin(), V.cend(), token);
+					if (res != V.cend())
+					{
+						const auto tIndex = std::distance(V.cbegin(), res);
+						++termCounts(tIndex, i);
+						++sumOccurrences;
+					}
 				}
 			}
 
 			//Include laplace smoothing
 			const auto denominator = sumOccurrences + V.size();
 
-			//Eigen::Index tIndex = 0;
-			//for (const auto& t : V)
 			for(size_t tIndex = 0; tIndex < V.size(); tIndex++)
 			{
-				const auto& t = V[tIndex];
-				int T_tc = 0;
-
-				try {
-					T_tc = occurrences.at(t);
-				}
-				catch (const std::out_of_range&)
-				{
-				}
-
 				//Include laplace smoothing
-				const auto numerator = T_tc + 1;
+				const auto numerator = termCounts(tIndex, i) + 1;
 
 				condProb(tIndex, i) = static_cast<double>(numerator) / static_cast<double>(denominator);
-
-				termCounts(tIndex, i) = T_tc;
 			}
 		}
 
