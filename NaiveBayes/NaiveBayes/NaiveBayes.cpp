@@ -483,7 +483,7 @@ std::vector<std::vector<std::pair<std::string, double>>> mutual_information(cons
 	return features;
 }
 
-Eigen::Array22i perform_m_fold_cross_validation(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& selected_features, const int M)
+Eigen::ArrayXXi perform_m_fold_cross_validation(const std::vector<ClassMetadata>& metadata, const std::vector<std::string>& selected_features, const int M)
 {
 	const auto n_classes = metadata.size();
 	const auto folds = get_m_fold_slices(metadata, M);
@@ -687,16 +687,16 @@ int __cdecl main(int argc, char* argv[])
 					chunk_features.emplace_back(selected_features[ti].first);
 				}
 
-				const Eigen::Array22i confusionMatrix = perform_m_fold_cross_validation(metadata, chunk_features, M);
+				const Eigen::ArrayXXi confusionMatrix = perform_m_fold_cross_validation(metadata, chunk_features, M);
 
 				double tp = confusionMatrix(0, 0);
-				double fn = confusionMatrix(0, 1);
-				double fp = confusionMatrix(1, 0);
-				double tn = confusionMatrix(1, 1);
+				double fn = confusionMatrix.block(0, 1, 1, confusionMatrix.cols() - 1).sum(); //confusionMatrix(0, 1);
+				double fp = confusionMatrix.block(1, 0, 1, confusionMatrix.rows() - 1).sum(); //confusionMatrix(1, 0);
+				//double tn = confusionMatrix(1, 1);
 
 				double precision = tp / (tp + fp);
 				double recall = tp / (tp + fn);
-				double accuracy = (tp + tn) / (tp + fp + tn + fn);
+				double accuracy = confusionMatrix.matrix().cast<double>().trace() / confusionMatrix.sum();
 				double F1 = 2 * precision * recall / (precision + recall);
 
 				std::stringstream prebuf;
