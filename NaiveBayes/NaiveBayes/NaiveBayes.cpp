@@ -790,13 +790,13 @@ int __cdecl main(int argc, char* argv[])
 		std::cout << "Performing 10-fold cross validation with no feature selection" << std::endl;
 		const auto confusionMatrix = perform_m_fold_cross_validation(metadata, {}, 10);
 		double tp = confusionMatrix(0, 0);
-		double fn = confusionMatrix(0, 1);
-		double fp = confusionMatrix(1, 0);
-		double tn = confusionMatrix(1, 1);
+		double fn = confusionMatrix.block(0, 1, 1, confusionMatrix.cols() - 1).sum(); //confusionMatrix(0, 1);
+		double fp = confusionMatrix.block(1, 0, 1, confusionMatrix.rows() - 1).sum(); //confusionMatrix(1, 0);
+																					  //double tn = confusionMatrix(1, 1);
 
 		double precision = tp / (tp + fp);
 		double recall = tp / (tp + fn);
-		double accuracy = (tp + tn) / (tp + fp + tn + fn);
+		double accuracy = confusionMatrix.matrix().cast<double>().trace() / confusionMatrix.sum();
 		double F1 = 2 * precision * recall / (precision + recall);
 
 		std::cout << "Confusion matrix:\n" << confusionMatrix << std::endl;
